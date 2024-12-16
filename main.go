@@ -7,6 +7,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"time"
+	"syscall"
 
 	"github.com/go-chi/chi"
 	"github.com/go-chi/cors"
@@ -37,8 +40,6 @@ func main() {
 
 	apiCfg := apiConfig{}
 
-	// https://github.com/libsql/libsql-client-go/#open-a-connection-to-sqld
-	// libsql://[your-database].turso.io?authToken=[your-auth-token]
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		log.Println("DATABASE_URL environment variable is not set")
@@ -87,11 +88,31 @@ func main() {
 
 	v1Router.Get("/healthz", handlerReadiness)
 
+	// Mount the v1Router to the main router
 	router.Mount("/v1", v1Router)
+
+	// Create the HTTP server
 	srv := &http.Server{
 		Addr:    ":" + port,
 		Handler: router,
 	}
+
+	// Graceful shutdown handling
+	go func() {
+		sigint := make(chan os.Signal, 1)
+		signal.Notify(sigint, syscall.SIGINT, syscall.SIGTERM)
+		<-sigint
+
+		log.Println("Shutting down server...")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Fatalf("Server forced to shutdown: %v", err)
+		}
+		log.Println("Server exiting")
+	}()
 
 	log.Printf("Serving on port: %s\n", port)
 	log.Fatal(srv.ListenAndServe())
